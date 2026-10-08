@@ -3,8 +3,11 @@ from pydantic import BaseModel
 from app.services.llm_service import generate_response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-
+from app.routes.conversation import router as conversations_router
+from app.routes.message import router as messages_router
 app = FastAPI()
+app.include_router(conversations_router)
+app.include_router(messages_router)
 
 app.add_middleware(
     CORSMiddleware,
