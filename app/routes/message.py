@@ -4,10 +4,10 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Message
 
-router = APIRouter()
+router = APIRouter(prefix="/api", tags=["Messages"])
 
 
-@router.get("/api/conversations/{conversation_id}/messages")
+@router.get("/conversations/{conversation_id}/messages")
 def get_messages(
     conversation_id: int,
     db: Session = Depends(get_db),
