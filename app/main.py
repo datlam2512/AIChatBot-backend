@@ -22,6 +22,7 @@ class ChatMessage(BaseModel):
     content:str
     
 class ChatRequest(BaseModel):
+    conversation_id : int
     messages: list[ChatMessage]
 
 @app.get("/")
