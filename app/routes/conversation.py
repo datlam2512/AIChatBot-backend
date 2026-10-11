@@ -19,9 +19,9 @@ def get_conversations(db: Session = Depends(get_db)):
 @router.post("/conversations", status_code= 201)
 def create_conversation(data: ConversationCreate, db: Session = Depends(get_db)):
     now = datetime.now(timezone.utc)
-    conversation = Converrsation(
+    conversation = Conversation(
         title = data.title,
-        create_at = now,
+        created_at = now,
         updated_at = now
     )
     db.add(conversation)
