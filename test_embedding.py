@@ -1,35 +1,54 @@
-import math
-from app.services.embedding_service import (generate_embeddings,generate_embedding)
 
-def cosine_similarity(a: list[float], b: list[float]) -> float:
-    dot_roduct = sum(x*y for x,y in zip(a,b))
-    norm_a = math.sqrt(sum(x*x for x in a))
-    norm_b = math.sqrt(sum(y*y for y in b))
-    if norm_a == 0  or norm_b == 0:
-        return 0.0
-    return dot_roduct/(norm_a*norm_b)
+import numpy as np
+
+from app.services.embedding_service import (
+    generate_embedding,
+    generate_embeddings,
+)
+
 
 chunks = [
-    "Nhân viên chính thức được nghỉ phép 12 ngày mỗi năm.",
-    "Công ty cung cấp bảo hiểm sức khỏe cho nhân viên.",
-    "Python là ngôn ngữ lập trình thường được sử dụng trong AI.",
+    "Machine Learning giúp máy tính học từ dữ liệu.",
+    "RAG kết hợp tìm kiếm tài liệu và tạo câu trả lời.",
+    "Python là ngôn ngữ lập trình.",
+    "Nhân viên được nghỉ phép 12 ngày mỗi năm.",
 ]
 
-question = "Một năm tôi được nghỉ bao nhiêu ngày?"
+question = "RAG hoạt động như thế nào?"
+top_k = 3
 
+# 1. Tạo embeddings
 chunk_vectors = generate_embeddings(chunks)
-question_vectors = generate_embedding(question)
+question_vector = generate_embedding(question)
 
-results = []
+# 2. Chuyển thành NumPy arrays
+matrix = np.asarray(chunk_vectors, dtype=np.float32)
+query = np.asarray(question_vector, dtype=np.float32)
 
-for chunk, vector in zip(chunks, chunk_vectors):
-    score = cosine_similarity(question_vectors, vector)
-    results.append((chunk, score))
+# 3. Kiểm tra số chiều
+if matrix.ndim != 2 or matrix.shape[1] != query.shape[0]:
+    raise ValueError("Embedding dimensions do not match")
 
-results.sort(key=lambda item: item[1], reverse= True)
+# 4. Tính Dot Product với tất cả chunks cùng lúc
+dot_products = matrix @ query
 
-for chunk, score in results:
-    print(f"Score: {score:.4f} | {chunk}")
+# 5. Tính norm
+chunk_norms = np.linalg.norm(matrix, axis=1)
+query_norm = np.linalg.norm(query)
 
-print("\nChunk liên quan nhất:")
-print(results[0][0])
+denominators = chunk_norms * query_norm
+
+if np.any(denominators == 0):
+    raise ValueError("Cannot compare zero vectors")
+
+# 6. Cosine Similarity
+scores = dot_products / denominators
+
+# 7. Lấy chỉ số các chunks có score cao nhất
+top_indices = np.argsort(scores)[::-1][:top_k]
+
+# 8. Hiển thị kết quả
+for index in top_indices:
+    print(f"Score: {scores[index]:.4f}")
+    print(f"Chunk: {chunks[index]}")
+    print("---")
