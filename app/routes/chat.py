@@ -54,7 +54,7 @@ def chat(request: ChatRequest):
         results = search_relevant_chunks(
             db=db,
             question=last_message.content,
-            top_k=3,
+            top_k=5,
         )
 
         # 4. Lấy nội dung chunks
