@@ -11,6 +11,7 @@ from app.services.document_service import (
 )
 from sqlalchemy import select, func
 from app.models import Document, DocumentChunk
+from app.services.document_service import DuplicateDocumentError
 router = APIRouter(
     prefix = "/api/documents",
     tags = ["Documents"]
@@ -139,11 +140,20 @@ def upload_pdf(file: UploadFile = File(...), db: Session = Depends(get_db)):
     )
 
 
-    document_id = save_document(
-        db= db,
+    
+    try:
+        document_id = save_document(
+        db=db,
         filename=filename,
-        text = text,
+        text=text,
     )
+
+    except DuplicateDocumentError as exc:
+        raise HTTPException(
+        status_code=409,
+        detail=str(exc),
+    ) from exc
+
 
     return {
         "message": "PDF processed sucessfully",

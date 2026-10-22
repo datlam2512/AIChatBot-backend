@@ -6,14 +6,33 @@ from sqlalchemy import delete
 from app.models import Document, DocumentChunk
 from app.utils.smart_chunking import smart_chunk_text
 from app.services.embedding_service import generate_embeddings
+from sqlalchemy import select, func
 
+class DuplicateDocumentError(Exception):
+    pass
 
 def save_document(
     db: Session,
     filename: str,
     text: str,
 ) -> int:
+    filename = filename.strip()
 
+    # Kiểm tra file đã tồn tại chưa
+    existing_id = db.scalar(
+        select(Document.id)
+        .where(
+            func.lower(func.trim(Document.filename))
+            == filename.lower()
+        )
+        .limit(1)
+    )
+
+    if existing_id is not None:
+        raise DuplicateDocumentError(
+            f"File '{filename}' đã tồn tại "
+            f"(document ID: {existing_id})"
+        )
     chunks = smart_chunk_text(
     text,
     chunk_size=500,
