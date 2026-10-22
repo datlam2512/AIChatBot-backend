@@ -3,19 +3,88 @@ from io import BytesIO
 from fastapi import APIRouter, Depends, File , HTTPException, UploadFile
 from sqlalchemy.orm import Session
 from pypdf import PdfReader
-
+from sqlalchemy import delete
 from app.database import get_db
 from app.services.document_service import (
     save_document,
     reindex_document,
 )
-
+from sqlalchemy import select, func
+from app.models import Document, DocumentChunk
 router = APIRouter(
     prefix = "/api/documents",
     tags = ["Documents"]
 )
 
 MAX_FILE_SIZE = 10 * 1024 * 1024 
+
+
+@router.get("")
+def get_all_documents(
+    db: Session = Depends(get_db)
+):
+    stmt = (
+        select(
+            Document.id,
+            Document.filename,
+            Document.create_at,
+            func.count(DocumentChunk.id).label("chunk_count")
+        )
+        .outerjoin(
+            DocumentChunk,
+            DocumentChunk.document_id == Document.id
+        )
+        .group_by(
+            Document.id,
+            Document.filename,
+            Document.create_at
+        )
+        .order_by(Document.id.desc())
+    )
+
+    results = db.execute(stmt).all()
+
+    return [
+        {
+            "id": row.id,
+            "filename": row.filename,
+            "created_at": row.create_at,
+            "chunk_count": row.chunk_count
+        }
+        for row in results
+    ]
+
+
+@router.get("/{document_id}")
+def get_document(
+    document_id: int,
+    db: Session = Depends(get_db),
+):
+    # 1. Tìm document theo ID
+    document = db.get(Document, document_id)
+
+    # 2. Kiểm tra document có tồn tại không
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found"
+        )
+
+    # 3. Đếm số chunks của document
+    chunk_count = db.scalar(
+        select(func.count(DocumentChunk.id))
+        .where(
+            DocumentChunk.document_id == document_id
+        )
+    )
+
+    # 4. Trả thông tin document
+    return {
+        "id": document.id,
+        "filename": document.filename,
+        "created_at": document.create_at,
+        "chunk_count": chunk_count,
+    }
 
 @router.post("/upload")
 def upload_pdf(file: UploadFile = File(...), db: Session = Depends(get_db)):
@@ -168,4 +237,46 @@ def reindex_pdf(
     return {
         "message": "Re-index successful",
         **result,
+    }
+@router.delete("/{document_id}")
+def delete_document(
+    document_id: int,
+    db: Session = Depends(get_db),
+):
+    # 1. Tìm tài liệu
+    document = db.get(Document, document_id)
+
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found"
+        )
+
+    filename = document.filename
+
+    try:
+        # 2. Xóa toàn bộ chunks thuộc tài liệu
+        result = db.execute(
+            delete(DocumentChunk).where(
+                DocumentChunk.document_id == document_id
+            )
+        )
+
+        deleted_chunks = result.rowcount
+
+        # 3. Xóa tài liệu gốc trong database
+        db.delete(document)
+
+        # 4. Lưu thay đổi
+        db.commit()
+
+    except Exception:
+        db.rollback()
+        raise
+
+    return {
+        "message": "Document deleted successfully",
+        "document_id": document_id,
+        "filename": filename,
+        "deleted_chunks": deleted_chunks,
     }

@@ -35,7 +35,7 @@ class Document(Base):
     )
 
 class DocumentChunk(Base):
-    __tablename__ = "documnet_chunks"
+    __tablename__ = "document_chunks"
     id: Mapped[int] = mapped_column(primary_key=True)
     document_id: Mapped[int] = mapped_column(ForeignKey("documents.id"))
     content: Mapped[str] = mapped_column(Text)
