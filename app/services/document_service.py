@@ -4,7 +4,7 @@ import numpy as np
 from sqlalchemy.orm import Session
 
 from app.models import Document, DocumentChunk
-from app.utils.chunking import chunk_text
+from app.utils.smart_chunking import smart_chunk_text
 from app.services.embedding_service import generate_embeddings
 
 
@@ -14,10 +14,10 @@ def save_document(
     text: str,
 ) -> int:
 
-    chunks = chunk_text(
-        text,
-        chunk_size=500,
-        overlap=100,
+    chunks = smart_chunk_text(
+    text,
+    chunk_size=500,
+    overlap=100,
     )
 
     if not chunks:
