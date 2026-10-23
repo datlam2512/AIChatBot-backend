@@ -9,7 +9,9 @@ from app.schemas.chat import ChatRequest
 from app.services.chat_prompt_graph import chat_prompt_graph
 from app.services.chat_service import stream_and_save
 from app.services.message_service import save_message
-
+from app.services.agent_stream_service import (
+    stream_agent_and_save,
+)
 
 router = APIRouter(
     prefix="/api",
@@ -17,14 +19,15 @@ router = APIRouter(
 )
 
 
+
 @router.post("/chat")
 def chat(request: ChatRequest):
 
-    # 1. Kiểm tra request
+    # 1. Kiểm tra messages
     if not request.messages:
         raise HTTPException(
             status_code=400,
-            detail="Messages cannot be empty"
+            detail="Messages cannot be empty",
         )
 
     last_message = request.messages[-1]
@@ -32,52 +35,41 @@ def chat(request: ChatRequest):
     if last_message.role != "user":
         raise HTTPException(
             status_code=400,
-            detail="Last message must be from user"
+            detail="Last message must be from user",
         )
 
     # 2. Kiểm tra conversation
     with SessionLocal() as db:
         conversation = db.get(
             Conversation,
-            request.conversation_id
+            request.conversation_id,
         )
 
         if conversation is None:
             raise HTTPException(
                 status_code=404,
-                detail="Conversation not found"
+                detail="Conversation not found",
             )
 
-    # 3. Chuyển Pydantic messages thành dictionaries
+        # 3. Lưu tin nhắn user
+        save_message(
+            db=db,
+            conversation_id=request.conversation_id,
+            role="user",
+            content=last_message.content,
+        )
+
+    # 4. Chuẩn bị lịch sử chat
     messages = [
         msg.model_dump()
         for msg in request.messages
     ]
 
-    # 4. Chạy LangGraph để chọn prompt
-    result = chat_prompt_graph.invoke({
-        "question": last_message.content,
-        "messages": messages,
-    })
-
-    llm_messages = result["llm_messages"]
-
-    print("[CHAT] Selected mode:", result["mode"])
-
-    # 5. Lưu tin nhắn user
-    with SessionLocal() as db:
-        save_message(
-            db=db,
-            conversation_id=request.conversation_id,
-            role="user",
-            content=last_message.content
-        )
-
-    # 6. Qwen streaming + lưu câu trả lời assistant
+    # 5. Stream bằng LangGraph Agent
     return StreamingResponse(
-        stream_and_save(
-            llm_messages,
-            request.conversation_id
+        stream_agent_and_save(
+            messages=messages,
+            conversation_id=request.conversation_id,
         ),
-        media_type="text/plain"
+        media_type="text/plain; charset=utf-8",
     )
