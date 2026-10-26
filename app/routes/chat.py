@@ -1,11 +1,10 @@
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException,Request
 from fastapi.responses import StreamingResponse
-
 from app.database import SessionLocal
-from app.models import Conversation
+from app.models import Conversation, Message
 from app.schemas.chat import ChatRequest
-
+from sqlalchemy import select
 from app.services.chat_prompt_graph import chat_prompt_graph
 from app.services.chat_service import stream_and_save
 from app.services.message_service import save_message
@@ -20,10 +19,13 @@ router = APIRouter(
 
 
 
-@router.post("/chat")
-def chat(request: ChatRequest):
 
-    # 1. Kiểm tra messages
+@router.post("/chat")
+def chat(
+    request: ChatRequest,
+    http_request: Request,
+):
+    # 1. Kiểm tra request
     if not request.messages:
         raise HTTPException(
             status_code=400,
@@ -38,8 +40,9 @@ def chat(request: ChatRequest):
             detail="Last message must be from user",
         )
 
-    # 2. Kiểm tra conversation
+    # 2. Kiểm tra conversation và lấy lịch sử cũ
     with SessionLocal() as db:
+
         conversation = db.get(
             Conversation,
             request.conversation_id,
@@ -51,7 +54,25 @@ def chat(request: ChatRequest):
                 detail="Conversation not found",
             )
 
-        # 3. Lưu tin nhắn user
+        old_messages = db.scalars(
+            select(Message)
+            .where(
+                Message.conversation_id
+                == request.conversation_id
+            )
+            .order_by(Message.id.asc())
+        ).all()
+
+        bootstrap_history = [
+            {
+                "role": msg.role,
+                "content": msg.content,
+            }
+            for msg in old_messages
+            if msg.role in ("user", "assistant")
+        ][-20:]
+
+        # Lưu tin nhắn mới như trước
         save_message(
             db=db,
             conversation_id=request.conversation_id,
@@ -59,17 +80,16 @@ def chat(request: ChatRequest):
             content=last_message.content,
         )
 
-    # 4. Chuẩn bị lịch sử chat
-    messages = [
-        msg.model_dump()
-        for msg in request.messages
-    ]
+    # 3. Lấy Agent có Checkpointer từ FastAPI
+    graph = http_request.app.state.agent_graph
 
-    # 5. Stream bằng LangGraph Agent
+    # 4. Stream câu trả lời
     return StreamingResponse(
         stream_agent_and_save(
-            messages=messages,
+            graph=graph,
+            user_text=last_message.content,
             conversation_id=request.conversation_id,
+            bootstrap_history=bootstrap_history,
         ),
         media_type="text/plain; charset=utf-8",
     )

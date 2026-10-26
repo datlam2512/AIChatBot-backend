@@ -1,54 +1,82 @@
 
 from langchain_core.messages import (
-    AIMessage,
     HumanMessage,
+    AIMessage,
 )
 
 from app.database import SessionLocal
 from app.services.message_service import save_message
-from app.services.tool_graph import tool_graph
 
 
 def stream_agent_and_save(
-    messages: list[dict],
+    graph,
+    user_text: str,
     conversation_id: int,
+    bootstrap_history: list[dict],
 ):
-    # 1. Chuyển messages từ frontend
-    # sang định dạng LangChain
-    chat_history = []
+    # 1. Một conversation tương ứng một thread
+    config = {
+        "configurable": {
+            "thread_id": f"conversation-{conversation_id}"
+        },
+        "recursion_limit": 16,
+    }
 
-    for message in messages:
-        role = message["role"]
-        content = message["content"]
+    # 2. Xem thread đã có Memory chưa
+    snapshot = graph.get_state(config)
 
-        if role == "user":
-            chat_history.append(
-                HumanMessage(content=content)
-            )
+    if snapshot.values.get("messages"):
 
-        elif role == "assistant":
-            chat_history.append(
-                AIMessage(content=content)
-            )
+        # Đã có checkpoint:
+        # chỉ gửi câu hỏi mới
+        input_messages = [
+            HumanMessage(content=user_text)
+        ]
 
+        print("[MEMORY] Restored existing thread")
+
+    else:
+
+        # Thread chưa có checkpoint:
+        # nạp lịch sử cũ từ bảng messages một lần
+        input_messages = []
+
+        for message in bootstrap_history:
+
+            if message["role"] == "user":
+                input_messages.append(
+                    HumanMessage(content=message["content"])
+                )
+
+            elif message["role"] == "assistant":
+                input_messages.append(
+                    AIMessage(content=message["content"])
+                )
+
+        # Thêm câu hỏi hiện tại
+        input_messages.append(
+            HumanMessage(content=user_text)
+        )
+
+        print("[MEMORY] Initialized thread from history")
+
+    # 3. Chạy Agent với persistent checkpoint
     answer_parts = []
 
-    # 2. Chạy LangGraph và nhận text theo từng chunk
-    for chunk, metadata in tool_graph.stream(
-        {"messages": chat_history},
+    for chunk, metadata in graph.stream(
+        {"messages": input_messages},
+        config=config,
         stream_mode="messages",
-        config={"recursion_limit": 12},
     ):
 
-        # Chỉ lấy output từ node assistant
+        # Chỉ lấy các token từ Assistant
         if metadata.get("langgraph_node") != "assistant":
             continue
 
-        # Không gửi dữ liệu tool call cho frontend
+        # Không hiển thị nội dung tool call
         if getattr(chunk, "tool_call_chunks", None):
             continue
 
-        # Chỉ gửi text, bỏ qua reasoning và tool metadata
         content = chunk.content
 
         if isinstance(content, str):
@@ -70,11 +98,10 @@ def stream_agent_and_save(
         if not text:
             continue
 
-        # 3. Stream text tới frontend
         answer_parts.append(text)
         yield text
 
-    # 4. Lưu câu trả lời khi graph chạy xong
+    # 4. Giữ hệ thống lưu lịch sử cho frontend
     full_answer = "".join(answer_parts)
 
     if full_answer:
