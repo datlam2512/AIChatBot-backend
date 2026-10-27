@@ -14,7 +14,7 @@ from app.services.rag_service import (
     search_relevant_chunks,
     build_rag_messages,
 )
-
+from langchain_core.runnables import RunnableConfig
 
 # 1. State: dữ liệu của workflow
 class PromptState(TypedDict, total=False):
@@ -50,10 +50,16 @@ router_llm = llm.with_structured_output(
     method="json_schema",
 )
 
-
 # 4. Router: vừa phân loại vừa viết lại câu hỏi
-def router_node(state: PromptState) -> dict:
+def router_node(
+    state: PromptState,
+    config: RunnableConfig,
+) -> dict:
     start = perf_counter()
+
+    user_id = config.get("configurable", {}).get("user_id")
+    if type(user_id) is not int or user_id <= 0:
+        raise ValueError("Authenticated user_id is required")
 
     question = state["question"]
     messages = state.get("messages", [])
@@ -177,16 +183,24 @@ def general_node(state: PromptState) -> dict:
 
 
 # 6. Nhánh Documents
-def documents_node(state: PromptState) -> dict:
+def documents_node(
+    state: PromptState,
+    config: RunnableConfig,
+) -> dict:
     print("[GRAPH] Documents RAG")
 
     start = perf_counter()
+
+    user_id = config.get("configurable", {}).get("user_id")
+    if type(user_id) is not int or user_id <= 0:
+        raise ValueError("Authenticated user_id is required")
 
     # Chỉ tìm pgvector khi Router chọn Documents
     with SessionLocal() as db:
         results = search_relevant_chunks(
             db=db,
             question=state["search_query"],
+            user_id=user_id,
             top_k=5,
         )
 

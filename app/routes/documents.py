@@ -10,8 +10,10 @@ from app.services.document_service import (
     reindex_document,
 )
 from sqlalchemy import select, func
-from app.models import Document, DocumentChunk
+from app.models import Document, DocumentChunk,User
 from app.services.document_service import DuplicateDocumentError
+from app.routes.auth import get_current_user
+from app.services.document_access import get_owned_document
 router = APIRouter(
     prefix = "/api/documents",
     tags = ["Documents"]
@@ -20,25 +22,30 @@ router = APIRouter(
 MAX_FILE_SIZE = 10 * 1024 * 1024 
 
 
+
 @router.get("")
 def get_all_documents(
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     stmt = (
         select(
             Document.id,
             Document.filename,
             Document.create_at,
-            func.count(DocumentChunk.id).label("chunk_count")
+            func.count(DocumentChunk.id).label("chunk_count"),
         )
         .outerjoin(
             DocumentChunk,
-            DocumentChunk.document_id == Document.id
+            DocumentChunk.document_id == Document.id,
+        )
+        .where(
+            Document.user_id == current_user.id
         )
         .group_by(
             Document.id,
             Document.filename,
-            Document.create_at
+            Document.create_at,
         )
         .order_by(Document.id.desc())
     )
@@ -50,36 +57,33 @@ def get_all_documents(
             "id": row.id,
             "filename": row.filename,
             "created_at": row.create_at,
-            "chunk_count": row.chunk_count
+            "chunk_count": row.chunk_count,
         }
         for row in results
     ]
+
+
 
 
 @router.get("/{document_id}")
 def get_document(
     document_id: int,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    # 1. Tìm document theo ID
-    document = db.get(Document, document_id)
+    document = get_owned_document(
+        db=db,
+        document_id=document_id,
+        user_id=current_user.id,
+    )
 
-    # 2. Kiểm tra document có tồn tại không
-    if document is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Document not found"
-        )
-
-    # 3. Đếm số chunks của document
     chunk_count = db.scalar(
         select(func.count(DocumentChunk.id))
         .where(
-            DocumentChunk.document_id == document_id
+            DocumentChunk.document_id == document.id
         )
     )
 
-    # 4. Trả thông tin document
     return {
         "id": document.id,
         "filename": document.filename,
@@ -87,8 +91,13 @@ def get_document(
         "chunk_count": chunk_count,
     }
 
+
 @router.post("/upload")
-def upload_pdf(file: UploadFile = File(...), db: Session = Depends(get_db)):
+def upload_pdf(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     filename = file.filename or ""
     if not filename.lower().endswith(".pdf"):
         raise HTTPException(
@@ -146,7 +155,8 @@ def upload_pdf(file: UploadFile = File(...), db: Session = Depends(get_db)):
         db=db,
         filename=filename,
         text=text,
-    )
+        user_id=current_user.id,
+)
 
     except DuplicateDocumentError as exc:
         raise HTTPException(
@@ -168,9 +178,11 @@ def reindex_pdf(
     document_id: int,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
+    
     filename = file.filename or ""
-
+    
     # 1. Kiểm tra file PDF
     if not filename.lower().endswith(".pdf"):
         raise HTTPException(
@@ -226,11 +238,12 @@ def reindex_pdf(
     # 3. Re-index
     try:
         result = reindex_document(
-            db=db,
-            document_id=document_id,
-            filename=filename,
-            text=text,
-        )
+              db=db,
+              document_id=document_id,
+              filename=filename,
+              text=text,
+              user_id=current_user.id,
+)
 
     except LookupError as exc:
         raise HTTPException(
@@ -248,36 +261,43 @@ def reindex_pdf(
         "message": "Re-index successful",
         **result,
     }
+
 @router.delete("/{document_id}")
 def delete_document(
     document_id: int,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    # 1. Tìm tài liệu
-    document = db.get(Document, document_id)
+    # 1. Kiểm tra chủ sở hữu và khóa bản ghi
+    document = db.scalar(
+        select(Document)
+        .where(
+            Document.id == document_id,
+            Document.user_id == current_user.id,
+        )
+        .with_for_update()
+    )
 
     if document is None:
         raise HTTPException(
             status_code=404,
-            detail="Document not found"
+            detail="Document not found",
         )
 
     filename = document.filename
 
     try:
-        # 2. Xóa toàn bộ chunks thuộc tài liệu
+        # 2. Xóa chunks và embeddings
         result = db.execute(
             delete(DocumentChunk).where(
-                DocumentChunk.document_id == document_id
+                DocumentChunk.document_id == document.id
             )
         )
 
         deleted_chunks = result.rowcount
 
-        # 3. Xóa tài liệu gốc trong database
+        # 3. Xóa document
         db.delete(document)
-
-        # 4. Lưu thay đổi
         db.commit()
 
     except Exception:

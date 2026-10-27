@@ -1,39 +1,62 @@
 
 from langchain_core.tools import tool
-from sqlalchemy import select, func
-
+from sqlalchemy import select, func,delete
 from app.database import SessionLocal
 from app.models import Document
 from app.services.rag_service import search_relevant_chunks
-
+from langgraph.types import interrupt
 import ast
 import math
 import operator
+from app.database import SessionLocal
+from app.models import Document, DocumentChunk
+from langgraph.prebuilt import ToolRuntime
 
-from langchain_core.tools import tool
+def get_tool_user_id(runtime: ToolRuntime) -> int:
+    user_id = runtime.config.get(
+        "configurable", {}
+    ).get("user_id")
+
+    if type(user_id) is not int or user_id <= 0:
+        raise PermissionError(
+            "Authenticated user_id is required"
+        )
+
+    return user_id
+
+
 @tool
-def get_document_count() -> int:
-    """Lấy tổng số tài liệu PDF hiện có trong database."""
+def get_document_count(runtime: ToolRuntime) -> int:
+    """Đếm số tài liệu PDF của người dùng hiện tại."""
 
-    print("[TOOL] Đang đếm tài liệu...")
+    user_id = get_tool_user_id(runtime)
+
+    print("[TOOL] Count documents for user:", user_id)
 
     with SessionLocal() as db:
         total = db.scalar(
             select(func.count(Document.id))
+            .where(Document.user_id == user_id)
         )
 
     return total or 0
 
 
-@tool
-def list_documents() -> list[dict]:
-    """Lấy danh sách tên và ID của các tài liệu PDF trong hệ thống."""
 
-    print("[TOOL] Đang lấy danh sách tài liệu...")
+
+@tool
+def list_documents(
+    runtime: ToolRuntime,
+) -> list[dict]:
+    """Liệt kê ID và tên PDF của người dùng hiện tại."""
+
+    user_id = get_tool_user_id(runtime)
 
     with SessionLocal() as db:
         documents = db.scalars(
-            select(Document).order_by(Document.id)
+            select(Document)
+            .where(Document.user_id == user_id)
+            .order_by(Document.id)
         ).all()
 
         return [
@@ -43,41 +66,53 @@ def list_documents() -> list[dict]:
             }
             for doc in documents
         ]
+
+
 @tool
-def search_documents(question: str) -> str:
+def search_documents(
+    question: str,
+    runtime: ToolRuntime,
+) -> str:
     """
     Tìm kiếm thông tin trong các tài liệu PDF
-    do người dùng upload vào Knowledge Base.
+    thuộc Knowledge Base của người dùng hiện tại.
 
-    Chỉ sử dụng khi câu hỏi yêu cầu tra cứu
-    tài liệu nội bộ, quy định, nội dung PDF
-    hoặc thông tin từ các file đã upload.
+    Chỉ dùng để tra cứu tài liệu nội bộ, PDF,
+    nội quy và các file đã upload.
 
-    KHÔNG sử dụng cho câu hỏi kiến thức chung
-    như "Python là gì?" hoặc "AI là gì?".
+    Không dùng cho câu hỏi kiến thức chung.
     """
 
-    print("[TOOL] Đang tìm trong tài liệu:", question)
+    user_id = get_tool_user_id(runtime)
+
+    print(
+        "[TOOL] Search documents:",
+        question,
+        "User:",
+        user_id,
+    )
 
     with SessionLocal() as db:
         results = search_relevant_chunks(
             db=db,
             question=question,
+            user_id=user_id,
             top_k=5,
         )
 
-    if not results:
-        return "Không tìm thấy nội dung tài liệu."
+        if not results:
+            return "Không tìm thấy nội dung tài liệu."
 
-    context = "\n\n".join(
-        f"[Đoạn {i}]\n{chunk.content}"
-        for i, (chunk, distance) in enumerate(
-            results,
-            start=1,
+        context = "\n\n".join(
+            f"[Đoạn {i}]\n{chunk.content}"
+            for i, (chunk, distance) in enumerate(
+                results,
+                start=1,
+            )
         )
-    )
 
     return context
+
 
 OPERATORS = {
     ast.Add: operator.add,
@@ -167,3 +202,104 @@ def calculator(expression: str) -> str:
     except (ValueError, ZeroDivisionError, SyntaxError,
             OverflowError, TypeError, RecursionError):
         return "Không thể tính biểu thức này"
+
+@tool
+def request_delete_document(
+    document_id: int,
+    runtime: ToolRuntime,
+) -> str:
+    """
+    Yêu cầu xóa PDF theo ID.
+    Chỉ cho phép xóa tài liệu thuộc người dùng
+    hiện tại và sau khi được xác nhận qua HITL.
+    """
+
+    user_id = get_tool_user_id(runtime)
+
+    # 1. Kiểm tra tài liệu thuộc người dùng
+    with SessionLocal() as db:
+        document = db.scalar(
+            select(Document).where(
+                Document.id == document_id,
+                Document.user_id == user_id,
+            )
+        )
+
+        if document is None:
+            return (
+                f"Không tìm thấy tài liệu ID "
+                f"{document_id} trong tài khoản của bạn."
+            )
+
+        filename = document.filename
+
+    # 2. Yêu cầu xác nhận
+    decision = interrupt({
+        "action": "delete_document",
+        "document_id": document_id,
+        "filename": filename,
+        "question": (
+            f"Bạn có chắc muốn xóa '{filename}'?"
+        ),
+    })
+
+    # 3. Kiểm tra dữ liệu xác nhận
+    if (
+        not isinstance(decision, dict)
+        or decision.get("approved") is not True
+        or decision.get("document_id") != document_id
+        or decision.get("filename") != filename
+    ):
+        return "Đã hủy hoặc từ chối yêu cầu xóa."
+
+    # 4. Kiểm tra quyền lần nữa trước khi DELETE
+    with SessionLocal() as db:
+        try:
+            document = db.scalar(
+                select(Document)
+                .where(
+                    Document.id == document_id,
+                    Document.user_id == user_id,
+                )
+                .with_for_update()
+            )
+
+            if document is None:
+                return (
+                    "Không tìm thấy tài liệu hoặc "
+                    "bạn không còn quyền xóa."
+                )
+
+            if document.filename != filename:
+                return (
+                    "Thông tin tài liệu đã thay đổi. "
+                    "Vui lòng thực hiện yêu cầu mới."
+                )
+
+            # 5. Xóa chunks và embeddings
+            result = db.execute(
+                delete(DocumentChunk).where(
+                    DocumentChunk.document_id
+                    == document_id
+                )
+            )
+
+            deleted_chunks = result.rowcount
+
+            # 6. Xóa document
+            db.delete(document)
+
+            # 7. Commit transaction
+            db.commit()
+
+        except Exception:
+            db.rollback()
+            raise
+
+    return (
+        f"Đã xóa thành công '{filename}' "
+        f"(ID {document_id}). "
+        f"Đã xóa {deleted_chunks} chunks liên quan."
+    )
+
+

@@ -10,6 +10,8 @@ from app.services.rag_service import (
     search_relevant_chunks,
     build_rag_messages,
 )
+from langchain_core.runnables import RunnableConfig
+
 
 
 # 1. State: dữ liệu dùng chung giữa các Node
@@ -38,11 +40,17 @@ router_llm = llm.with_structured_output(
     method="json_schema",
 )
 
-
 # 4. Node thứ nhất: tìm tài liệu và chọn nhánh
 
-def router_node(state: ChatState) -> dict:
+def router_node(
+    state: ChatState,
+    config: RunnableConfig,
+) -> dict:
     print("\n[GRAPH] Running Router Node")
+
+    user_id = config.get("configurable", {}).get("user_id")
+    if type(user_id) is not int or user_id <= 0:
+        raise ValueError("Authenticated user_id is required")
 
     original_question = state["question"]
 
@@ -65,6 +73,7 @@ def router_node(state: ChatState) -> dict:
         results = search_relevant_chunks(
             db=db,
             question=search_query,
+            user_id=user_id,
             top_k=5,
         )
 

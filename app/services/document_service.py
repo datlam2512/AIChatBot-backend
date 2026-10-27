@@ -15,23 +15,22 @@ def save_document(
     db: Session,
     filename: str,
     text: str,
+    user_id: int,
 ) -> int:
     filename = filename.strip()
 
     # Kiểm tra file đã tồn tại chưa
-    existing_id = db.scalar(
-        select(Document.id)
-        .where(
-            func.lower(func.trim(Document.filename))
-            == filename.lower()
+    existing = db.scalar(
+        select(Document).where(
+            Document.filename == filename,
+            Document.user_id == user_id,
         )
-        .limit(1)
     )
 
-    if existing_id is not None:
+    if existing is not None:
         raise DuplicateDocumentError(
             f"File '{filename}' đã tồn tại "
-            f"(document ID: {existing_id})"
+            f"(document ID: {existing.id})"
         )
     chunks = smart_chunk_text(
     text,
@@ -57,7 +56,7 @@ def save_document(
     if np.any(norms == 0):
         raise ValueError("Embeddings contain zero vectors")
 
-    document = Document(filename=filename)
+    document = Document(filename=filename, user_id=user_id)
 
     try:
         db.add(document)
@@ -81,20 +80,26 @@ def save_document(
     return document.id
 
 
+
 def reindex_document(
     db: Session,
     document_id: int,
     filename: str,
     text: str,
+    user_id: int,
 ) -> dict:
 
-    # 1. Kiểm tra tài liệu có tồn tại không
-    document = db.get(Document, document_id)
+    # 1. Kiểm tra tài liệu thuộc người dùng
+    document = db.scalar(
+        select(Document).where(
+            Document.id == document_id,
+            Document.user_id == user_id,
+        )
+    )
 
     if document is None:
         raise LookupError("Document not found")
 
-    # Tránh cập nhật nhầm PDF khác
     if document.filename.casefold() != filename.casefold():
         raise ValueError(
             "Filename does not match the existing document"
@@ -110,10 +115,9 @@ def reindex_document(
     if not chunks:
         raise ValueError("Document has no text")
 
-    # 3. Tạo embeddings mới
+    # 3. Generate Embeddings
     vectors = generate_embeddings(chunks)
 
-    # 4. Kiểm tra embeddings bằng NumPy
     matrix = np.asarray(vectors, dtype=np.float32)
 
     if (
@@ -131,18 +135,38 @@ def reindex_document(
     if np.any(norms == 0):
         raise ValueError("Zero embedding vector found")
 
-    # 5. Chỉ bắt đầu thay dữ liệu sau khi
-    # chunks và embeddings đã sẵn sàng
+    # 4. Thay thế dữ liệu trong transaction
     try:
+        # Khóa và kiểm tra lại quyền trước khi ghi
+        document = db.scalar(
+            select(Document)
+            .where(
+                Document.id == document_id,
+                Document.user_id == user_id,
+            )
+            .with_for_update()
+        )
+
+        if document is None:
+            raise LookupError("Document not found")
+
+        if document.filename.casefold() != filename.casefold():
+            raise ValueError(
+                "Document filename has changed"
+            )
+
+        # Xóa chunks cũ
         delete_result = db.execute(
             delete(DocumentChunk).where(
                 DocumentChunk.document_id == document_id
             )
         )
 
-        # 6. Lưu chunks mới
+        # Tạo chunks mới
         for chunk, vector in zip(
-            chunks, matrix, strict=True
+            chunks,
+            matrix,
+            strict=True,
         ):
             db.add(
                 DocumentChunk(
@@ -152,12 +176,9 @@ def reindex_document(
                 )
             )
 
-        # 7. Xác nhận toàn bộ thay đổi
         db.commit()
 
     except Exception:
-        # Nếu xảy ra lỗi ghi database,
-        # hoàn tác thay đổi trong transaction
         db.rollback()
         raise
 
@@ -167,3 +188,4 @@ def reindex_document(
         "old_chunks": delete_result.rowcount,
         "new_chunks": len(chunks),
     }
+

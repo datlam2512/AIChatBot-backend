@@ -2,26 +2,50 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.models import DocumentChunk
 from app.services.embedding_service import generate_embedding
+from app.models import Document, DocumentChunk
 
-def search_relevant_chunks(db:Session, question: str, top_k: int = 3):
+def search_relevant_chunks(
+    db: Session,
+    question: str,
+    user_id: int,
+    top_k: int = 3,
+):
     if not question.strip():
         raise ValueError("Question must not be empty")
+
     if top_k <= 0:
         raise ValueError("top_k must be positive")
+
+    if user_id <= 0:
+        raise ValueError("Invalid user ID")
+
+    # 1. Chuyển câu hỏi thành embedding
     question_vector = generate_embedding(question)
-    distance = DocumentChunk.embedding.cosine_distance(question_vector)
+
+    # 2. Tính khoảng cách cosine
+    distance = DocumentChunk.embedding.cosine_distance(
+        question_vector
+    )
+
+    # 3. Join chunks với documents để lọc user
     stmt = (
         select(
             DocumentChunk,
-            distance.label("distance")
+            distance.label("distance"),
+        )
+        .join(
+            Document,
+            Document.id == DocumentChunk.document_id,
+        )
+        .where(
+            Document.user_id == user_id
         )
         .order_by(distance)
         .limit(top_k)
     )
 
-    result = db.execute(stmt).all()
+    return db.execute(stmt).all()
 
-    return result
 
 
 def build_rag_messages(

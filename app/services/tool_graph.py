@@ -1,8 +1,6 @@
 
 from langchain_ollama import ChatOllama
-
 from langchain_core.messages import SystemMessage
-
 from langgraph.graph import (
     StateGraph,
     MessagesState,
@@ -18,6 +16,8 @@ from app.tools.document_tools import (
     get_document_count,
     list_documents,
     search_documents,
+    calculator, 
+    request_delete_document
 )
 from langgraph.checkpoint.memory import InMemorySaver
 # 1. Danh sách công cụ
@@ -25,6 +25,8 @@ tools = [
     get_document_count,
     list_documents,
     search_documents,
+    calculator,
+    request_delete_document,
 ]
 
 

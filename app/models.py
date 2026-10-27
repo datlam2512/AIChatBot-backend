@@ -12,7 +12,10 @@ class Conversation(Base):
     title: Mapped[str] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime)
     updated_at: Mapped[datetime] = mapped_column(DateTime)
-
+    user_id: Mapped[int | None] = mapped_column(
+       ForeignKey("users.id"),
+       nullable=True
+)
 
 class Message(Base):
     __tablename__ = "messages"
@@ -33,6 +36,10 @@ class Document(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc)
     )
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=True
+)
 
 class DocumentChunk(Base):
     __tablename__ = "document_chunks"
@@ -40,3 +47,22 @@ class DocumentChunk(Base):
     document_id: Mapped[int] = mapped_column(ForeignKey("documents.id"))
     content: Mapped[str] = mapped_column(Text)
     embedding: Mapped[list[float]] = mapped_column(VECTOR(768))
+    
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True
+    )
+
+    email: Mapped[str] = mapped_column(
+        String(255),
+        unique=True,
+        nullable=False
+    )
+
+    password_hash: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False
+    )

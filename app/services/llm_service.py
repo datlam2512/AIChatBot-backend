@@ -15,7 +15,7 @@ def generate_response(message: list[dict]):
       response.raise_for_status()
       for line in response.iter_lines():
          if not line:
-            continute
+            continue
          data = json.loads(line)
          content = data["message"]["content"]
          if content:

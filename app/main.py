@@ -26,8 +26,8 @@ from app.routes import (
     conversation,
     message,
     documents,
+    auth
 )
-
 
 # ======================================
 # 1. LOGGING
@@ -178,7 +178,7 @@ app.include_router(chat.router)
 app.include_router(conversation.router)
 app.include_router(message.router)
 app.include_router(documents.router)
-
+app.include_router(auth.router)
 
 # ======================================
 # 10. HEALTH CHECK
