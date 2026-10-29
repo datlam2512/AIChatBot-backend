@@ -4,7 +4,10 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
-OLLAMA_EMBED_URL = os.getenv("OLLAMA_EMBED_URL")
+OLLAMA_EMBED_URL = os.getenv(
+    "OLLAMA_EMBED_URL",
+    "http://127.0.0.1:11434/api/embed"
+)
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL")
 
 def generate_embeddings(texts: list[str]) -> list[list[float]]:
